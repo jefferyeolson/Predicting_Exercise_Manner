@@ -1,0 +1,106 @@
+---
+title: "Predicting Exercise Manner"
+author: "Jeff Olson"
+date: "3/4/2021"
+output: html_document
+---
+### Assignment
+Predict the manner in which people exercise using data from accelerometers on the belt, forearm, arm, and dumbbell of 6 participants. Six healthy participants (20-28 years old, with little weight lifting experience) were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). (See section on Weight Lifting Exercise Dataset, Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H., http://groupware.les.inf.puc-rio.br/har).  
+```{r echo=FALSE, cache=TRUE, include=FALSE}
+# libraries
+packages = c("tidyverse", 
+             "ggplot2", 
+             "ggpubr", 
+             "caret", 
+             "pgmm", 
+             "rpart", 
+             "rpart.plot", 
+             "rattle",
+             "tree", 
+             "randomForest",
+             "e1071",
+             "kernlab",
+             "doParallel",
+             "parallel",
+             "caretEnsemble")
+package.check <- lapply(packages, FUN = function(x) {
+        if (!require(x, character.only = TRUE)) {
+                install.packages(x, dependencies = TRUE)
+                library(x, character.only = TRUE)
+        }
+})
+
+# Download and read training and testing data. 
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", 
+              destfile = "training.csv")
+training <- read.csv("training.csv")
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",
+             destfile = "testing.csv")
+testing <- read.csv("testing.csv")
+length_var_train <- vector(length = 160)
+length_var_test <- vector(length = 160)
+for(i in 1:160) {
+        length_var_train[i] <- length(unique(training[,i]))
+}
+for(i in 1:160) {
+        length_var_test[i] <- length(unique(testing[,i]))
+}
+var_two_train <- unique(names(training[,length_var_train <= 2]))
+var_two_test <- unique(names(testing[,length_var_test <= 2]))
+var_two_all <- unique(c(var_two_train, var_two_test))
+training <- training %>%
+        select(-all_of(var_two_all))
+testing <- testing %>%
+        select(-all_of(var_two_all))            
+### parallel processing and fitting
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+fitControl <- trainControl(method = "cv",
+                           number = 5,
+                           allowParallel = TRUE)
+set.seed(100)
+system.time(fit <- train(classe ~ ., method= "rf",
+                         data=training,
+                         trControl = fitControl,
+                         na.action = na.omit))
+system.time(fit2 <- train(classe ~ ., method= "rf",
+                         data=training,
+                         trControl = fitControl,
+                         tuneLength = 40,
+                         na.action = na.omit))
+```
+### Results
+Using a random forest approach in the caret package of R, I was able to develop an algorithm that predicted almost 100% of the exercise manners in six cross-validations of the training data, using the random forest method, based on 500 trees, with 14 variables at each split. It has not yet been tested on a testing set of data, because the outcome variable has been omitted from the testing data set. It was tested on a separate bootstrap set of 20 observations from the training set with 0.996 accuracy and a Kappa of 1. Of course, this is not the same as using the testing data. More will be revealed when the classe observations are made available for that dataset.   
+
+###How the Model Was Built 
+The random forest method was chosen, because it has shown itself to be effective in predicting classifications between more than two qualitative outcomes, as in this case. It tries multiple combinations of variables and selects combinations based on predictive value. 
+####Variable Selection
+The initial choice of variables was based on eliminating those with little or no variance, particularly those with only one value. With only one value, they could not provide any discrimination (although, perhaps, NA observations might have been used as a second value, a possibility for future consideration). These variables were identified and removed from both the training and testing data sets, reducing the number of variables from 160 to 59. Caret provides for pre-processing methods that address this type of issue, but applicable ones for eliminating variables with little or no variance, such as "zv" and "nzv", only apply to numeric variables. Most of the problematic variables were not numeric, so they needed to be eliminated in a pre-process that was not done through the function preProcess.  
+Here are the most important predictors in the trees:
+```{r echo=FALSE, cache=TRUE}
+varImp(fit2)
+```
+
+A plot of the accuracy of cross-validation and the number of predictors revealed that accuracy declined for more than 40 predictors, so the model was limited to forty and re-run. The result was just as, or even more successful with fewer predictors in the models (14 at each split as opposed to 41).  
+**Plot of Accuracy with Unlimited Predictors**  
+```{r echo=FALSE, cache=TRUE}
+plot(fit)
+```
+**Plot of Accuracy with Predictors Limited**  
+```{r echo=FALSE, cache=TRUE}
+plot(fit2)
+```
+**Final Model**  
+```{r echo=FALSE, cache=TRUE}
+fit2$finalModel
+```
+### Cross Validation  
+Cross validation is at the heart of the random forest method. According to the creators, "In random forests, there is no need for cross-validation or a separate test set to get an unbiased estimate of the test set error. It is estimated internally, during the run, as follows: Each tree is constructed using a different bootstrap sample from the original data. About one-third of the cases are left out of the bootstrap sample and not used in the construction of the kth tree."(Breiman and Cutler, Random Forests, https://www.stat.berkeley.edu/~breiman/RandomForests/cc_home.htm).
+The confusion matrix provides a cross-validated (5 fold) set of results. 
+**Confusion Matrix**  
+```{r echo=FALSE, cache=TRUE}
+confusionMatrix.train(fit2)
+```
+### Out-of-Sample Error
+For a random forest model, the out-of-sample error is the mean squared error (MSE) of the fit of the model to testing or validation data. The testing data do not include the outcome variable, so we cannot compute this number directly. A bootstrap sample of 20 from the training data provides a substitute for the testing data.  
+Kappa and OOB provide error estimates that are more appropriate for classification trees. As you can see from the results of the final training model, Kappa for the training model is 1, and the OOB estimate of the error rate is 0.01%. Of course, once again, this is for the training data, not the testing data.
